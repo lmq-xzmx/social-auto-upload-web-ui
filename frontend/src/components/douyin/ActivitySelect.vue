@@ -6,7 +6,7 @@
       clearable
       filterable
       multiple
-      multiple-limit="5"
+      :multiple-limit="5"
       no-data-text=" "
       @change="handleChange"
       style="width: 100%"

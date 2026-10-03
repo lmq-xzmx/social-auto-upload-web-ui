@@ -23,11 +23,11 @@ html.dark {
   --bg-base-rgb: 10, 10, 26;
   --bg-elevated-rgb: 18, 18, 42;
 
-  // 文字
+  // 文字（提高对比度）
   --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --text-placeholder: #64748b;
+  --text-secondary: #b8c4d4;
+  --text-muted: #8a9ab0;
+  --text-placeholder: #7a8a9e;
 
   // 边框
   --border: rgba(255, 255, 255, 0.08);
@@ -72,11 +72,11 @@ html.light {
   --bg-base-rgb: 245, 246, 250;
   --bg-elevated-rgb: 255, 255, 255;
 
-  // 文字
+  // 文字（提高对比度）
   --text-primary: #1e293b;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-  --text-placeholder: #94a3b8;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-placeholder: #64748b;
 
   // 边框
   --border: rgba(15, 23, 42, 0.1);

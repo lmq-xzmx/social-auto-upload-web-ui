@@ -1,6 +1,6 @@
 <div align="center">
 
-# QianFan Sync · 千帆云递
+# XiaoJu Sync · 小炬人
 
 **One-Stop Multi-Platform Social Media Auto-Publisher** · One interface, distribute everywhere
 
@@ -17,9 +17,9 @@
 
 ## 📖 Project Overview
 
-**QianFan Sync (千帆云递)** is a modern multi-platform social media auto-publishing tool that solves the "post once, publish everywhere" problem for content creators.
+**XiaoJu Sync (小炬人)** is a modern multi-platform social media auto-publishing tool that solves the "post once, publish everywhere" problem for content creators.
 
-Whether you are an individual blogger, an MCN agency, or a corporate social-media operator, you likely bounce between 10+ platforms repeatedly — copy-pasting, re-uploading, re-formatting. QianFan Sync collapses all of that into **one interface**: drop in a video/image set → pick platforms and accounts → fill in title/tags/cover once → hit publish, and let automation handle the rest.
+Whether you are an individual blogger, an MCN agency, or a corporate social-media operator, you likely bounce between 10+ platforms repeatedly — copy-pasting, re-uploading, re-formatting. XiaoJu Sync collapses all of that into **one interface**: drop in a video/image set → pick platforms and accounts → fill in title/tags/cover once → hit publish, and let automation handle the rest.
 
 The project is built on top of the open-source project [dreammis/social-auto-upload](https://github.com/dreammis/social-auto-upload). While keeping its Playwright automation engine, we **completely rewrote the frontend experience** to deliver a visual, batch-capable, schedulable publishing workflow. It adopts a three-layer architecture: **Vue 3 frontend + Python Flask backend + TypeScript MCP service**, runs as a local web service, and keeps all data on your machine.
 
@@ -113,7 +113,7 @@ We recommend starting the project with an AI coding assistant (e.g. **Claude Cod
 
 Just say this to the AI Agent in the project root:
 
-> "Help me start the QianFan Sync project: install the dependencies, bring up the frontend and backend, then tell me the access URL."
+> "Help me start the XiaoJu Sync project: install the dependencies, bring up the frontend and backend, then tell me the access URL."
 
 The AI Agent will automatically: free up occupied ports → install Python/Node deps → start the backend (5409), frontend (5173), and MCP (5410) → open the browser and return the access URL. The entire flow is fully automated and can even self-diagnose and retry on errors.
 
