@@ -1,0 +1,11 @@
+# 前端 .dockerignore
+node_modules/
+dist/
+.env
+.env.*
+.env.development
+.env.production
+.git/
+*.log
+*.tmp
+.DS_Store

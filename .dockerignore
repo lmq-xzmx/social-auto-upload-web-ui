@@ -1,0 +1,98 @@
+# ====================
+# Docker 构建上下文排除文件
+# 优化：减少构建上下文体积，加快构建速度
+# ====================
+
+# ===== Git 版本控制 =====
+.git
+.gitignore
+.gitattributes
+.gitmodules
+
+# ===== 文档（不需要在镜像中）=====
+*.md
+LICENSE
+docs/
+changelog/
+README*
+!frontend/src/assets/*.md
+
+# ===== 开发配置 =====
+.claude/
+.env
+.env.*
+.env.development
+.env.production
+.vscode/
+.idea/
+*.swp
+*.swo
+*.local
+
+# ===== 临时文件和系统文件 =====
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+*.pid
+
+# ===== 依赖（不复制，在容器内安装）=====
+node_modules/
+backend/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/.pytest_cache/
+frontend/node_modules/
+
+# ===== 测试和覆盖率 =====
+tests/
+coverage/
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+coverage/
+.nyc_output/
+
+# ===== 桌面打包（不需要）=====
+src-tauri/
+*.exe
+*.msi
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+
+# ===== 构建产物（重新构建）=====
+dist/
+build/
+*.egg-info/
+__pypackages__/
+
+# ===== 数据库文件（挂载卷）=====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== 设计资源（可选排除）=====
+design-system/
+*.sketch
+*.fig
+*.xd
+
+# ===== 其他项目文件 =====
+scripts/
+merge-data.sh
+merge-data.bat
+start*.sh
+start*.bat
+update.sh
+versions
+pr.md
+CLAUDE.md
+
+# ===== 隐藏文件 ======
+.*
+!.dockerignore
+!.gitignore

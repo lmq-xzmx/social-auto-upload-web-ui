@@ -1,0 +1,104 @@
+# ====================
+# 后端 Dockerfile - 极致优化版
+# 多阶段构建 + 层优化 + 最小化基础镜像
+# ====================
+
+# ===== 阶段1: 构建依赖层 =====
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+# 优化层: 先复制依赖文件，利用 Docker 缓存
+COPY backend/requirements.txt .
+
+# 安装依赖到用户目录（避免系统污染）
+RUN useradd -m -u 1000 appuser && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Playwright 浏览器依赖（最小化）
+        libgl1 \
+        libglib2.0-0 \
+        libnss3 \
+        libnspr4 \
+        libdbus-1-3 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libatspi2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libgbm1 \
+        libpango-1.0-0 \
+        libcairo2 \
+        libasound2t64 \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# ===== 阶段2: 运行层 - 极致精简 =====
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 创建非 root 用户
+RUN useradd -m -u 1000 appuser
+
+# 优化层: 只安装运行时必需依赖
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Playwright 运行时依赖
+        libgl1 \
+        libglib2.0-0 \
+        libnss3 \
+        libnspr4 \
+        libdbus-1-3 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxrandr2 \
+        libgbm1 \
+        libpango-1.0-0 \
+        libcairo2 \
+        libasound2t64 \
+        tini \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && apt-get clean
+
+# 复制 Python 依赖（从 builder 层）
+COPY --from=builder /root/.local /home/appuser/.local
+
+# 复制应用代码
+COPY --chown=appuser:appuser backend/ ./backend/
+
+# 设置环境变量
+ENV PATH=/home/appuser/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SAU_PORT=5004 \
+    SAU_DATA_DIR=/app/data
+
+# 创建数据目录
+RUN mkdir -p /app/data && chown -R appuser:appuser /app
+
+# 使用 tini 作为 init 系统
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# 切换到非 root 用户
+USER appuser
+
+EXPOSE 5004
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5004/ || exit 1
+
+CMD ["python", "backend/app.py"]
