@@ -54,3 +54,5 @@ AGENTS.md
 
 # ZCode 工具配置
 .zcode/
+# backend 侧 cookie 软链（指向 data/cookiesFile 的运行时凭据，绝不入库）
+backend/cookiesFile/

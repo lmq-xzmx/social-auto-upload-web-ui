@@ -30,6 +30,11 @@ logger = get_channel_logger("xiaohongshu")
 
 _XHS_LOGIN_URL = "https://creator.xiaohongshu.com/login"
 _XHS_CREATOR_URL = "https://creator.xiaohongshu.com/"
+# 登录后的创作者首页。根 URL 会跳 /login（实测 2026-10-27，登录态有效也跳），
+# 所以登录检查、抓 profile/stats 都得用这个地址，不能用根 URL。
+_XHS_HOME_URL = "https://creator.xiaohongshu.com/new/home"
+# 笔记管理页：tab 栏「全部 N」的 N 是账号笔记总数（各状态合计）。
+_XHS_NOTE_MANAGER_URL = "https://creator.xiaohongshu.com/new/note-manager"
 _XHS_PUBLISH_VIDEO_URL = (
     "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video"
 )
@@ -175,9 +180,10 @@ class XiaohongshuPlatform(BasePlatform):
             context = await self.create_context(browser, storage_state=cookie_path)
             page = await context.new_page()
             try:
-                await page.goto(_XHS_CREATOR_URL, timeout=30000)
+                # 用登录后的首页：根 URL 会跳 /login，拿它判登录态会把有效 cookie 误判成失效
+                await page.goto(_XHS_HOME_URL, timeout=30000)
                 await page.wait_for_load_state("domcontentloaded", timeout=10000)
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
 
                 if _XHS_LOGIN_URL in page.url:
                     logger.info("[xhs] cookie expired, needs re-login")
@@ -204,18 +210,28 @@ class XiaohongshuPlatform(BasePlatform):
         - 关注数 (DOM: `.numerical` + 标签文本"关注数")
         - 粉丝数 (DOM: `.numerical` + 标签文本"粉丝数")
         - 获赞与收藏 (DOM: `.numerical` + 标签文本"获赞与收藏")
+
+        再从 creator.xiaohongshu.com/new/note-manager 的 tab 栏读笔记总数。
         """
         cookie_path = str(Path(BASE_DIR / "cookiesFile" / cookie_file))
-        url = _XHS_CREATOR_URL
+        url = _XHS_HOME_URL
 
         browser = await self.create_browser(headless=True)
         try:
             context = await self.create_context(browser, storage_state=cookie_path)
             page = await context.new_page()
             try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
+                # 不能用 networkidle：实测它比页面实际渲染早得多，后面两步会在
+                # 空白页上抓，拿到空名字空 stats。首页卡片数据要等接口回来才渲染，
+                # 实测 .numerical 出现在 goto 后 ~22 秒 —— 所以先等它出现再抓。
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                try:
+                    await page.wait_for_selector(".numerical", timeout=30000)
+                except Exception:
+                    logger.info("[xhs] 等待首页数据渲染超时，继续尝试抓取")
                 name, avatar = await scrape_user_profile(page)
                 stats = await _scrape_xhs_stats(page)
+                stats = await _append_xhs_note_count(page, stats)
                 return {"name": name, "avatar": avatar, "stats": stats}
             except Exception as e:
                 logger.info(f"[xhs] sync profile failed: {e}")
@@ -233,10 +249,12 @@ class XiaohongshuPlatform(BasePlatform):
         """
         try:
             try:
-                await page.goto(_XHS_CREATOR_URL, wait_until="networkidle", timeout=30000)
+                # 同 sync_profile：根 URL 跳 /login，networkidle 又早于渲染
+                await page.goto(_XHS_HOME_URL, wait_until="domcontentloaded", timeout=45000)
             except Exception:
                 pass
-            return await _scrape_xhs_stats(page)
+            stats = await _scrape_xhs_stats(page)
+            return await _append_xhs_note_count(page, stats)
         except Exception as exc:
             logger.info(f"[xhs login] _login_stats_fn 抓取失败: {exc}")
             return []
@@ -1637,8 +1655,10 @@ async def _scrape_xhs_stats(page) -> list:
     }
 
     try:
-        # 等待数值渲染(最多 8 秒,登录态下通常 <2s)
-        await page.wait_for_selector(".numerical", timeout=8000)
+        # 等待数值渲染。实测(2026-10-27)首页 .numerical 要 ~22 秒才出现，
+        # 早先的 8 秒在慢网络下必然超时，超时后 evaluate 打在空白页上，
+        # 结果是「同步成功但 stats 全空」—— 比报错更难查。
+        await page.wait_for_selector(".numerical", timeout=30000)
     except Exception:
         logger.info("[xhs stats] 等待 .numerical 超时")
 
@@ -1672,5 +1692,77 @@ async def _scrape_xhs_stats(page) -> list:
     except Exception as exc:
         logger.info(f"[xhs stats] 抓取失败: {exc}")
 
+    stats.sort(key=lambda x: x.get("SORT", 999))
+    return stats
+
+
+async def _scrape_xhs_note_count(page) -> int | None:
+    """从「笔记管理」页 tab 栏读账号笔记总数。
+
+    页面 DOM（2026-10-27 实测）：
+        <div class="tab-bar">
+          <div class="tab-item tab-item--active">全部 0</div>
+          <div class="tab-item">已发布</div>
+          <div class="tab-item">审核中</div>
+          <div class="tab-item">未通过</div>
+        </div>
+
+    「全部」后面的数字是笔记总数（各状态合计），比首页卡片的三个数多一个维度。
+
+    只接受纯数字（允许千分位逗号）：万 / 万+ 这类缩写读不出准确值，
+    宁可返回 None 让下游记 missing，也不写一个近似值充数。
+    """
+    try:
+        await page.goto(_XHS_NOTE_MANAGER_URL, wait_until="networkidle", timeout=30000)
+    except Exception as exc:
+        logger.info(f"[xhs] 打开笔记管理页失败: {exc}")
+        return None
+
+    try:
+        await page.wait_for_selector(".tab-bar .tab-item", timeout=10000)
+    except Exception:
+        logger.info("[xhs] 等待笔记管理 tab 栏超时")
+        return None
+
+    try:
+        raw = await page.evaluate(
+            """() => {
+                const items = [...document.querySelectorAll('.tab-bar .tab-item')];
+                for (const el of items) {
+                    const t = (el.textContent || '').trim();
+                    if (t.startsWith('全部')) return t;
+                }
+                return '';
+            }"""
+        )
+    except Exception as exc:
+        logger.info(f"[xhs] 读笔记管理 tab 失败: {exc}")
+        return None
+
+    text = (raw or "").strip()
+    m = re.match(r"^全部\s*([\d,]+)$", text)
+    if not m:
+        logger.info(f"[xhs] 笔记总数无法解析成数字: {text!r}")
+        return None
+    try:
+        return int(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
+async def _append_xhs_note_count(page, stats: list) -> list:
+    """把笔记总数并进 stats；抓不到就原样返回。
+
+    单独一个函数是为了 sync_profile 和 _login_stats_fn 共用同一份逻辑，
+    保证"登录后同步"和"同步按钮"看到的运营数据完全一致。
+
+    抓不到笔记数只是少一项数据，不是全丢 —— 前面已经抓到的
+    关注数/粉丝数/获赞与收藏照常返回。
+    """
+    note_count = await _scrape_xhs_note_count(page)
+    if note_count is None:
+        return stats
+    stats = list(stats)
+    stats.append({"ICON": "edit", "COUNT": note_count, "NAME": "笔记总数", "SORT": 4})
     stats.sort(key=lambda x: x.get("SORT", 999))
     return stats

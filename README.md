@@ -4,6 +4,20 @@
 
 **一站式多平台社交媒体自动发布工具** · 一个界面，把内容分发到全网
 
+> [!NOTE]
+> **归档说明（2026-10-28）**
+>
+> 本项目在本仓库体系中**只保留浏览器执行层的收编来源地位**：其 `backend/impl/`（19 个平台的
+> Playwright/CloakBrowser 实现）、`backend/util/`、`backend/conf.py` 已 **vendor 收编** 进
+> [GEO-Flow](../GEO-Flow/engine-python/)，由 GEO-Flow 的 `internal/platform/python_bridge/bridge.py`
+> 以 JSON 协议调用。
+>
+> - GEO-Flow **不再依赖**本仓库（`SAU_PATH` 仅作为回退开关，默认指向 GEO-Flow 仓库内）；
+> - 本仓库**仍有独立使用价值**：独立可跑的 19 平台发布工具 + 前端 UI + MCP 服务，
+>   适合不接入 GEO 业务链路时单独使用；
+> - 本仓库后续不再作为 GEO 体系的依赖被演进，平台参数契约与修复记录统一维护在
+>   [GEO-Flow/docs/平台发布参数契约.md](../GEO-Flow/docs/平台发布参数契约.md)。
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Version](https://img.shields.io/badge/version-1.2.5-42b883.svg)](./changelog)
 [![Platforms](https://img.shields.io/badge/platforms-19-ff6b6b.svg)](#-支持平台)
