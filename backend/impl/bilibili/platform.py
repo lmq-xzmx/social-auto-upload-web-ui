@@ -423,6 +423,18 @@ class BilibiliPlatform(BasePlatform):
                         icon, sort_no, name = label_map[label]
                         count = _parse_int(item.get('num', '0'))
                         stats.append({"ICON": icon, "COUNT": count, "NAME": name, "SORT": sort_no})
+
+                # 去重：页面上「播放量」会出现两次（视频区 + 另一处卡片），
+                # 同名项只保留第一次抓到的 —— 重复项会让下游按标签取值时
+                # 拿到哪一份变得不确定（前端按 SORT 排，值可能取到后抓的那个）。
+                seen_names = set()
+                deduped = []
+                for s in stats:
+                    if s["NAME"] in seen_names:
+                        continue
+                    seen_names.add(s["NAME"])
+                    deduped.append(s)
+                stats = deduped
             except Exception as exc:
                 logger.info(f"[bilibili stats] 抓取失败: {exc}")
 

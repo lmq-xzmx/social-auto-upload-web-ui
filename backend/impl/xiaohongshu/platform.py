@@ -1,6 +1,7 @@
 """Xiaohongshu platform implementation — CloakBrowser."""
 
 import asyncio
+import json
 import os
 import re
 import threading
@@ -1651,7 +1652,9 @@ async def _scrape_xhs_stats(page) -> list:
     label_map = {
         "关注数":     ("follow", 1, "关注数"),
         "粉丝数":     ("user",   2, "粉丝数"),
-        "获赞与收藏": ("like",   3, "获赞与收藏"),
+        # SORT 4 而不是 3：累计点赞（SORT 3）拿不到时（列表分页截不全）
+        # 这一项才会顶到第三位；拿得到时第三位显示的是更准的「累计点赞」。
+        "获赞与收藏": ("like",   4, "获赞与收藏"),
     }
 
     try:
@@ -1696,73 +1699,129 @@ async def _scrape_xhs_stats(page) -> list:
     return stats
 
 
-async def _scrape_xhs_note_count(page) -> int | None:
-    """从「笔记管理」页 tab 栏读账号笔记总数。
+async def _scrape_xhs_note_data(page) -> tuple:
+    """读「笔记管理」页的笔记总数与逐篇笔记数据。
 
+    返回 (总数 | None, 逐篇数据 list)。两样都拿不到时返回 (None, [])。
+
+    ── 总数从 DOM 的 tab 栏读 ──
     页面 DOM（2026-10-27 实测）：
         <div class="tab-bar">
-          <div class="tab-item tab-item--active">全部 0</div>
+          <div class="tab-item tab-item--active">全部 2</div>
           <div class="tab-item">已发布</div>
-          <div class="tab-item">审核中</div>
-          <div class="tab-item">未通过</div>
+          ...
         </div>
-
-    「全部」后面的数字是笔记总数（各状态合计），比首页卡片的三个数多一个维度。
-
+    「全部」后面的数字是笔记总数（各状态合计）。
     只接受纯数字（允许千分位逗号）：万 / 万+ 这类缩写读不出准确值，
     宁可返回 None 让下游记 missing，也不写一个近似值充数。
+
+    ── 逐篇数据从页面自己的 API 响应里截 ──
+    笔记列表每篇的互动数在这条接口的响应里，且是**命名字段**：
+        /api/galaxy/v2/creator/note/user/posted?tab=0&page=0
+        {notes: [{likes, collected_count, comments_count, shared_count, view_count, ...}]}
+
+    为什么不用 DOM 上那 5 个数字：DOM 只有 5 个没有表头的数，
+    只能靠图标猜哪个是赞、哪个是藏 —— 猜错就是错数据。
+    接口里的字段名是确定的。
+
+    为什么不让代码自己 fetch：那个接口要前端签名头（x-s/x-t），
+    裸 fetch 直接 406。所以让页面自己发请求，我们截响应。
     """
-    try:
-        await page.goto(_XHS_NOTE_MANAGER_URL, wait_until="networkidle", timeout=30000)
-    except Exception as exc:
-        logger.info(f"[xhs] 打开笔记管理页失败: {exc}")
-        return None
+    captured = []
 
-    try:
-        await page.wait_for_selector(".tab-bar .tab-item", timeout=10000)
-    except Exception:
-        logger.info("[xhs] 等待笔记管理 tab 栏超时")
-        return None
+    def _on_response(resp):
+        if "note/user/posted" in resp.url:
+            captured.append(resp)
 
+    page.on("response", _on_response)
     try:
-        raw = await page.evaluate(
-            """() => {
-                const items = [...document.querySelectorAll('.tab-bar .tab-item')];
-                for (const el of items) {
-                    const t = (el.textContent || '').trim();
-                    if (t.startsWith('全部')) return t;
-                }
-                return '';
-            }"""
-        )
-    except Exception as exc:
-        logger.info(f"[xhs] 读笔记管理 tab 失败: {exc}")
-        return None
+        try:
+            await page.goto(_XHS_NOTE_MANAGER_URL, wait_until="domcontentloaded", timeout=45000)
+        except Exception as exc:
+            logger.info(f"[xhs] 打开笔记管理页失败: {exc}")
+            return None, []
 
-    text = (raw or "").strip()
-    m = re.match(r"^全部\s*([\d,]+)$", text)
-    if not m:
-        logger.info(f"[xhs] 笔记总数无法解析成数字: {text!r}")
-        return None
-    try:
-        return int(m.group(1).replace(",", ""))
-    except ValueError:
-        return None
+        try:
+            await page.wait_for_selector(".tab-bar .tab-item", timeout=15000)
+        except Exception:
+            logger.info("[xhs] 等待笔记管理 tab 栏超时")
+
+        # 1) tab 栏的笔记总数
+        total = None
+        try:
+            raw = await page.evaluate(
+                """() => {
+                    const items = [...document.querySelectorAll('.tab-bar .tab-item')];
+                    for (const el of items) {
+                        const t = (el.textContent || '').trim();
+                        if (t.startsWith('全部')) return t;
+                    }
+                    return '';
+                }"""
+            )
+            text = (raw or "").strip()
+            m = re.match(r"^全部\s*([\d,]+)$", text)
+            if m:
+                total = int(m.group(1).replace(",", ""))
+            else:
+                logger.info(f"[xhs] 笔记总数无法解析成数字: {text!r}")
+        except Exception as exc:
+            logger.info(f"[xhs] 读笔记管理 tab 失败: {exc}")
+
+        # 2) 页面自己发的笔记列表响应
+        notes = []
+        for resp in captured:
+            try:
+                body = await resp.text()
+                data = (json.loads(body) or {}).get("data") or {}
+                notes = data.get("notes") or []
+                if notes:
+                    break
+            except Exception as exc:
+                logger.info(f"[xhs] 解析笔记列表响应失败: {exc}")
+                continue
+
+        return total, notes
+    finally:
+        page.remove_listener("response", _on_response)
 
 
 async def _append_xhs_note_count(page, stats: list) -> list:
-    """把笔记总数并进 stats；抓不到就原样返回。
+    """把笔记总数与累计互动数并进 stats；抓不到就原样返回。
 
     单独一个函数是为了 sync_profile 和 _login_stats_fn 共用同一份逻辑，
     保证"登录后同步"和"同步按钮"看到的运营数据完全一致。
 
-    抓不到笔记数只是少一项数据，不是全丢 —— 前面已经抓到的
-    关注数/粉丝数/获赞与收藏照常返回。
+    累计互动（点赞/收藏/评论/分享）只有在**拿到的笔记数 == tab 上的总数**
+    时才累加：列表分页时只能截到第一页，累加出来的是少算的累计值 ——
+    那比 missing 更糟（报告显示"齐全"，分数却是错的）。
     """
-    note_count = await _scrape_xhs_note_count(page)
-    if note_count is None:
+    total, notes = await _scrape_xhs_note_data(page)
+    if total is None:
         return stats
+
     stats = list(stats)
-    stats.append({"ICON": "edit", "COUNT": note_count, "NAME": "笔记总数", "SORT": 4})
+    stats.append({"ICON": "edit", "COUNT": total, "NAME": "笔记总数", "SORT": 8})
+
+    if notes and len(notes) == total:
+        def _sum(key):
+            total_sum = 0
+            for n in notes:
+                try:
+                    total_sum += int(n.get(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+            return total_sum
+
+        stats.append({"ICON": "like", "COUNT": _sum("likes"), "NAME": "累计点赞", "SORT": 3})
+        stats.append({"ICON": "star", "COUNT": _sum("collected_count"), "NAME": "累计收藏", "SORT": 5})
+        stats.append({"ICON": "chat", "COUNT": _sum("comments_count"), "NAME": "累计评论", "SORT": 6})
+        stats.append({"ICON": "share", "COUNT": _sum("shared_count"), "NAME": "累计分享", "SORT": 7})
+    elif notes:
+        logger.info(
+            f"[xhs] 只截到 {len(notes)} 篇（tab 计数 {total}），可能分页了 —— "
+            f"累计互动数宁可不报，也不给一个少算的值"
+        )
+
     stats.sort(key=lambda x: x.get("SORT", 999))
     return stats

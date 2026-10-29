@@ -564,7 +564,20 @@ def check_account():
     if not platform:
         return jsonify({"code": 400, "msg": "不支持的平台类型"}), 400
 
-    valid = asyncio.run(platform.check_cookie(record['filePath']))
+    # check_cookie 会真开浏览器访问平台页面，网络慢/被风控时会抛异常
+    # （比如 Page.goto 超时）。之前没兜住，异常直接冒成 500 ——
+    # 前端只看到「服务器错误」，用户分不清是 cookie 失效还是网络问题。
+    # 这里区分开：能查出来是有效/失效，查不出来就如实说「检查失败」。
+    try:
+        valid = asyncio.run(platform.check_cookie(record['filePath']))
+    except Exception as exc:
+        logger.warning(f"[checkAccount] 检查失败(id={record['id']}): {exc}")
+        return jsonify({
+            "code": 502,
+            "msg": f"检查失败：{exc}",
+            "data": {"id": record['id'], "status": None, "valid": None},
+        }), 502
+
     new_status = 1 if valid else 0
     with sqlite3.connect(str(DB_PATH)) as conn:
         conn.execute('UPDATE user_info SET status = ? WHERE id = ?', (new_status, record['id']))
