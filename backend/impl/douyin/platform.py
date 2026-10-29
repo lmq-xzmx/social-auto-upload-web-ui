@@ -7,6 +7,7 @@ Chromium) with automatic Playwright fallback.
 """
 
 import asyncio
+import json
 import re
 import threading
 import time
@@ -200,19 +201,41 @@ class DouyinPlatform(BasePlatform):
             context = await self.create_context(browser, storage_state=cookie_path)
             try:
                 page = await context.new_page()
+
+                # 作品数只能从接口拿（DOM 上没有）。
+                # media/user/info 里有 aweme_count（作品数）/ total_favorited（获赞）。
+                # 先挂监听再去页面 —— 否则首屏响应可能早于监听注册。
+                api_user = {}
+
+                async def _capture_user_info(resp):
+                    if "media/user/info" not in resp.url:
+                        return
+                    try:
+                        body = await resp.text()
+                        user = (json.loads(body) or {}).get("user") or {}
+                        if user:
+                            api_user.update(user)
+                    except Exception:
+                        pass
+
+                page.on("response", lambda r: asyncio.ensure_future(_capture_user_info(r)))
+
                 try:
                     await page.goto(
                         "https://creator.douyin.com/",
                         wait_until="domcontentloaded",
-                        timeout=30000,
+                        timeout=45000,
                     )
                 except Exception:
                     pass
-                # 等用户卡片渲染(短超时)
+                # 等用户卡片渲染。
+                # 实测(2026-10-29)首页要 ~20 秒才出 statics，8 秒必然超时 ——
+                # 超时后 evaluate 打在「加载中，请稍候...」的骨架屏上，
+                # 结果是「同步成功但 stats 全空」，比报错更难查。
                 try:
                     await page.wait_for_selector(
                         "[class*='statics-'], [class*='statics-item-']",
-                        timeout=8000,
+                        timeout=30000,
                     )
                 except Exception:
                     logger.info("[douyin stats] 等待 statics 超时")
@@ -227,14 +250,25 @@ class DouyinPlatform(BasePlatform):
                             // textContent 包含 "关注"/"粉丝"/"获赞" + 数字 (在 <span> 里)
                             const spans = item.querySelectorAll('span');
                             if (!spans.length) return;
-                            // 取最后一个 span(数字)
-                            const numEl = spans[spans.length - 1];
-                            const num = (numEl.textContent || '').trim();
+                            // 数字 span 的定位：不能取「最后一个」——
+                            // 「关注」项后面跟的是箭头图标、「粉丝指数」项跟的是
+                            // info 图标(都是空文本的 span)，取最后一个会拿到空串。
+                            // 改成：取最后一个**有数字内容**的 span。
+                            let num = '';
+                            for (let i = spans.length - 1; i >= 0; i--) {
+                                const t = (spans[i].textContent || '').trim();
+                                if (t && /^[0-9,.]+$/.test(t)) { num = t; break; }
+                            }
                             // textContent 是 label + 数字拼接,识别 label
                             const full = (item.textContent || '').trim();
                             let label = '';
-                            if (full.startsWith('关注')) label = '关注';
+                            // 「粉丝指数」要单列 —— 它不是真实粉丝数。
+                            // 抖音自己的接口说得很明白(creator/center/fans/index/config)：
+                            //   "粉丝指数：是基于真实关注人数计算，体现账号传播力的综合指标"
+                            // 把它当粉丝数填进报告，下游会以为有 197 个粉丝。
+                            if (full.startsWith('粉丝指数')) label = '粉丝指数';
                             else if (full.startsWith('粉丝')) label = '粉丝';
+                            else if (full.startsWith('关注')) label = '关注';
                             else if (full.startsWith('获赞')) label = '获赞';
                             if (label && num) {
                                 out.push({label, num});
@@ -245,9 +279,10 @@ class DouyinPlatform(BasePlatform):
                 )
 
                 label_map = {
-                    "关注": ("follow", 1, "关注"),
-                    "粉丝": ("user",   2, "粉丝"),
-                    "获赞": ("like",   3, "获赞"),
+                    "关注":     ("follow", 1, "关注"),
+                    "粉丝":     ("user",   2, "粉丝"),
+                    "粉丝指数": ("index",  4, "粉丝指数"),
+                    "获赞":     ("like",   3, "获赞"),
                 }
                 stats = []
                 for item in (result or []):
@@ -260,6 +295,12 @@ class DouyinPlatform(BasePlatform):
                         except (ValueError, TypeError):
                             count = 0
                         stats.append({"ICON": icon, "COUNT": count, "NAME": std_name, "SORT": sort_no})
+
+                # 作品数：DOM 上没有，只能从 media/user/info 的 aweme_count 拿。
+                # 它是账号累计作品数，与评分器的 video_count 语义一致。
+                aweme_count = api_user.get("aweme_count")
+                if isinstance(aweme_count, int) and aweme_count >= 0:
+                    stats.append({"ICON": "video", "COUNT": aweme_count, "NAME": "作品数", "SORT": 5})
 
                 if not name and not avatar and not stats:
                     logger.info(f"[douyin] sync_profile 抓取为空,url={page.url}")
